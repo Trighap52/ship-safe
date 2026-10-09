@@ -3,10 +3,12 @@
 What Ship Safe is working on, what just shipped, and what we are deliberately
 not building. Updated when a release goes out.
 
-The [11.0 milestone](https://github.com/asamassekou10/ship-safe/milestone/3)
-remains open; its remaining issues are claimable. Comment on an issue to take
-it. Every new rule still needs a false-positive story before it is considered
-finished.
+The 11.0.0 release is published, but the
+[11.0 milestone](https://github.com/asamassekou10/ship-safe/milestone/3)
+remains open because several planned workstreams below are still unfinished.
+The listed feature issues are claimable; the umbrella issue #202 tracks scope
+and evidence rather than a separate implementation task. Every new rule still
+needs a false-positive story before it is considered finished.
 
 ---
 
@@ -85,7 +87,11 @@ documented to reach them. Scope and evidence model in
 | [#135](https://github.com/asamassekou10/ship-safe/issues/135) | Machine-readable protection status for agent integrations — *good first issue* |
 | [#136](https://github.com/asamassekou10/ship-safe/issues/136) | A truthful "Protected by Ship Safe" session indicator |
 | [#206](https://github.com/asamassekou10/ship-safe/issues/206) | Capability graph: repository-origin and A2A-delegation nodes |
-| [#202](https://github.com/asamassekou10/ship-safe/issues/202) | The 11.0 scope issue itself |
+
+Umbrella tracker: [#202](https://github.com/asamassekou10/ship-safe/issues/202)
+defines the 11.0 scope and evidence model; it is not a separate implementation
+task. Keep the milestone open until the remaining feature issues are complete
+or explicitly deferred.
 
 ### Two ideas shaping the work
 
