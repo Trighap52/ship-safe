@@ -16,10 +16,15 @@ Unicode instructions are checked too.
 
 Push configurations are recognized in JSON and literal JavaScript/TypeScript
 and Python objects under `pushNotificationConfig`, `taskPushNotificationConfig`,
-or their snake_case spellings. An unrelated OAuth callback is not A2A evidence.
+or their snake_case spellings. Nested authentication fields may precede the
+callback URL; only the configuration's direct literal URL is inspected. An
+unrelated OAuth callback is not A2A evidence.
 Remote fetch detection covers `fetch`, `axios.get`, `requests.get`, and
 `httpx.get` with literal discovery URLs. Dynamic URLs, arbitrary SDK wrappers,
 and cross-file signature/hash verification are outside this static check.
+Fetch integrity is recognized only on an unconditional literal options object
+in the second argument. Conditional options and hashes in other arguments do
+not establish an integrity check.
 
 ## Signature states
 

@@ -95,28 +95,49 @@ function callEnd(source, start) {
 }
 
 
-function hasFetchIntegrity(call) {
-  // Tokenize only the bounded call. Comments and strings cannot introduce
-  // properties; nested headers and later overrides are not Fetch SRI options.
-  const tokens = (call.match(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|\.\.\.|[^\s]/g) || []).filter(token => !token.startsWith('//') && !token.startsWith('/*'));
-  let braces = 0;
-  let parens = 0;
-  let pinned = false;
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token.startsWith('//') || token.startsWith('/*')) continue;
-    if (token === '(') parens++;
-    else if (token === ')') parens--;
-    else if (token === '{') braces++;
-    else if (token === '}') braces--;
-    if (braces !== 1 || parens !== 1) continue;
-    // Unknown computed keys or spreads can replace a previously seen pin.
-    if (token === '...' || token === '[') return false;
-    if (['integrity', '"integrity"', "'integrity'"].includes(token)) {
-      pinned = tokens[i + 1] === ':' && [',', '}'].includes(tokens[i + 3]) && /^['"]sha(?:256-[A-Za-z0-9+/]{43}=|384-[A-Za-z0-9+/]{64}|512-[A-Za-z0-9+/]{86}==)['"]$/.test(tokens[i + 2] || '');
+function sourceTokens(source) {
+  return (source.match(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|[A-Za-z_$][\w$]*|\.\.\.|[^\s]/g) || [])
+    .filter(token => !token.startsWith('//') && !token.startsWith('/*') && !token.startsWith('#'));
+}
+
+// Read direct properties without confusing nested objects with their parent.
+// Unknown keys and spreads can overwrite a property, so they remain unproven.
+function literalObject(tokens, start) {
+  if (tokens[start] !== '{') return null;
+  const properties = new Map();
+  const closers = { '{': '}', '[': ']', '(': ')' };
+  let cursor = start + 1;
+  while (cursor < tokens.length) {
+    if (tokens[cursor] === '}') return { properties, end: cursor };
+    const key = tokens[cursor];
+    if (!/^(?:[A-Za-z_$][\w$]*|"[^"\\]*"|'[^'\\]*')$/.test(key) || tokens[cursor + 1] !== ':') return null;
+    cursor += 2;
+    const valueStart = cursor;
+    const stack = [];
+    while (cursor < tokens.length) {
+      const token = tokens[cursor];
+      if (stack.length === 0 && (token === ',' || token === '}')) break;
+      if (Object.hasOwn(closers, token)) stack.push(closers[token]);
+      else if (['}', ']', ')'].includes(token) && stack.pop() !== token) return null;
+      cursor++;
     }
+    if (cursor === valueStart || cursor >= tokens.length || stack.length) return null;
+    properties.set(key.replace(/^['"]|['"]$/g, ''), tokens.slice(valueStart, cursor));
+    if (tokens[cursor] === ',') cursor++;
   }
-  return pinned;
+  return null;
+}
+
+function hasFetchIntegrity(call) {
+  const tokens = sourceTokens(call);
+  // The first argument is the literal discovery URL. Only an unconditional
+  // object in the second argument establishes Fetch's native SRI behavior.
+  if (tokens[0] !== 'fetch' || tokens[1] !== '(' || tokens[3] !== ',') return false;
+  const options = literalObject(tokens, 4);
+  if (!options) return false;
+  if (![')', ','].includes(tokens[options.end + 1])) return false;
+  const integrity = options.properties.get('integrity');
+  return integrity?.length === 1 && /^['"]sha(?:256-[A-Za-z0-9+/]{43}=|384-[A-Za-z0-9+/]{64}|512-[A-Za-z0-9+/]{86}==)['"]$/.test(integrity[0]);
 }
 
 export class A2ASecurityAgent extends BaseAgent {
@@ -199,11 +220,17 @@ export class A2ASecurityAgent extends BaseAgent {
       const masks = commentMask(source.split('\n'), { file });
       const isCode = index => !masks[source.slice(0, index).split('\n').length - 1]
         && !isInsideJavaScriptNonCode(source, index);
-      const pushes = /\b(?:task_?push_?notification_?config|push_?notification_?config)["']?\s*[:=]\s*\{[^{}]{0,2048}?["']?url["']?\s*:\s*(["'])([^"'\n]+)\1/gi;
+      const pushes = /\b(?:task_?push_?notification_?config|push_?notification_?config)["']?\s*[:=]\s*\{/gi;
       for (const match of source.matchAll(pushes)) {
         // Quoted property names start one character before the regex match.
         const start = /["']/.test(source[match.index - 1] || '') ? match.index - 1 : match.index;
-        if (isCode(start)) callback(match[2], match.index);
+        if (!isCode(start)) continue;
+        const objectStart = match.index + match[0].length - 1;
+        const config = literalObject(sourceTokens(source.slice(objectStart, objectStart + 8192)), 0);
+        const value = config?.properties.get('url');
+        // Resolve only a direct literal URL; nested authentication URLs and
+        // expressions do not establish the push callback's destination.
+        if (value?.length === 1 && /^(["'])([^"'\\\n]*)\1$/.test(value[0])) callback(value[0].slice(1, -1), match.index);
       }
       const fetches = /(?<![\w.])(?:fetch|axios\.get|requests\.get|httpx\.get)\s*\(\s*(["'`])(https?:\/\/[^"'`\n]+\/\.well-known\/agent(?:-card)?\.json(?:[?#][^"'`\n]*)?)\1/g;
       for (const match of source.matchAll(fetches)) {

@@ -123,6 +123,33 @@ describe('A2A endpoint and callback destinations', () => {
     assert.ok(!JSON.stringify(findings).includes('fixture-password'));
     assert.ok(!JSON.stringify(findings).includes('fixture-token'));
   });
+  it('detects callback URLs after nested authentication in JS and Python', async () => {
+    for (const filename of ['client.js', 'client.py']) {
+      for (const key of ['pushNotificationConfig', 'task_push_notification_config']) {
+        const source = `config = { "${key}": {
+          "authentication": { "schemes": ["Bearer"], "credentials": "fixture-token" },
+          "url": "http://169.254.169.254/callback"
+        } }`;
+        const findings = hits(await scan(source, filename), 'A2A_PUSH_NOTIFICATION_SSRF');
+        assert.equal(findings.length, 1);
+        assert.ok(!JSON.stringify(findings).includes('fixture-token'));
+      }
+    }
+  });
+  it('does not attribute nested or commented URLs to the callback', async () => {
+    for (const filename of ['client.js', 'client.py']) {
+      const source = `config = { "pushNotificationConfig": {
+        "authentication": { "url": "http://169.254.169.254/" },
+        "url": "https://callbacks.example.com/"
+      } }`;
+      assert.deepEqual(await scan(source, filename), []);
+    }
+    assert.deepEqual(await scan(`const config = { pushNotificationConfig: {
+      /* url: 'http://169.254.169.254/' */
+      authentication: { schemes: ['Bearer'] },
+      url: 'https://callbacks.example.com/'
+    } };`, 'client.js'), []);
+  });
 });
 
 describe('A2A runtime card integrity', () => {
@@ -144,6 +171,26 @@ describe('A2A runtime card integrity', () => {
     for (const options of [`{ headers: { integrity: '${sri}' } }`, `{ integrity: '${sri}', integrity: '' }`, `{ integrity: '${sri}', ...otherOptions }`, `{ integrity: '${sri}' + untrustedSuffix }`]) {
       assert.equal(hits(await scan(`fetch('https://agent.example.com/.well-known/agent-card.json', ${options});`, 'client.js'), 'A2A_REMOTE_CARD_UNPINNED').length, 1);
     }
+  });
+  it('does not treat conditional options or ignored arguments as guaranteed pins', async () => {
+    for (const options of [
+      `enabled ? { integrity: '${sri}' } : {}`,
+      `enabled ? {} : { integrity: '${sri}' }`,
+      `{}, { integrity: '${sri}' }`,
+      `{ integrity: '${sri}' } && {}`,
+    ]) {
+      const source = `fetch('https://agent.example.com/.well-known/agent-card.json', ${options});`;
+      assert.equal(hits(await scan(source, 'client.js'), 'A2A_REMOTE_CARD_UNPINNED').length, 1);
+    }
+  });
+  it('recognizes a second-argument pin alongside nested options and comments', async () => {
+    const source = `fetch('https://agent.example.com/.well-known/agent-card.json', {
+      headers: { Accept: 'application/json' },
+      // Fetch enforces this hash.
+      integrity: '${sri}',
+    },);`;
+    assert.deepEqual(await scan(source, 'client.js'), []);
+    assert.deepEqual(await scan(`fetch('https://agent.example.com/.well-known/agent-card.json', { integrity: '${sri}' }, {});`, 'client.js'), []);
   });
   it('ignores references in comments, strings and Python docstrings', async () => {
     const request = "fetch('https://agent.example.com/.well-known/agent-card.json')";
