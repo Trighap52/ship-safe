@@ -29,6 +29,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { redactLocalPaths } from '../utils/path-redaction.js';
+import { PACKAGE_VERSION } from '../utils/package-version.js';
 import chalk from 'chalk';
 import { fileURLToPath } from 'url';
 
@@ -210,7 +212,12 @@ function remove() {
 // =============================================================================
 
 function status(options = {}) {
-  const settingsState = readSettingsState({ quiet: Boolean(options.json) });
+  // Status is observational: malformed or unreadable settings must never be
+  // repaired or backed up as a side effect of checking protection.
+  const settingsState = readSettingsState({
+    quiet: Boolean(options.json),
+    backupMalformed: false,
+  });
   const hookStatus = getHookStatus(settingsState.settings, {
     preToolUse: fs.existsSync(PRE_HOOK_SCRIPT),
     postToolUse: fs.existsSync(POST_HOOK_SCRIPT),
@@ -218,7 +225,7 @@ function status(options = {}) {
   }, settingsState.valid);
 
   if (options.json) {
-    process.stdout.write(JSON.stringify(hookStatus, null, 2) + '\n');
+    process.stdout.write(JSON.stringify(redactLocalPaths(hookStatus), null, 2) + '\n');
   } else {
     printStatus(hookStatus);
   }
@@ -226,31 +233,42 @@ function status(options = {}) {
   process.exitCode = hookStatus.protected ? 0 : 1;
 }
 
-export function getHookStatus(settings, scripts, settingsValid = true) {
-  const preRegistered = Boolean(settings.hooks?.PreToolUse && hasEntry(settings.hooks.PreToolUse, PRE_COMMAND));
-  const postRegistered = Boolean(settings.hooks?.PostToolUse && hasEntry(settings.hooks.PostToolUse, POST_COMMAND));
-  const preReady = preRegistered && scripts.preToolUse;
-  const postReady = postRegistered && scripts.postToolUse;
-  const protectedState = settingsValid && preReady && postReady;
-  const hasPartialState = preRegistered || postRegistered || scripts.preToolUse || scripts.postToolUse;
+export function getHookStatus(settings = {}, scripts = {}, settingsValid = true) {
+  const structurallyValid = isValidSettingsShape(settings);
+  const valid = settingsValid && structurallyValid;
+  const safeSettings = isRecord(settings) ? settings : {};
+  const scriptStatus = {
+    preToolUse: Boolean(scripts.preToolUse),
+    postToolUse: Boolean(scripts.postToolUse),
+    statusLine: Boolean(scripts.statusLine),
+  };
+  const preRegistered = Boolean(safeSettings.hooks?.PreToolUse && hasEntry(safeSettings.hooks.PreToolUse, PRE_COMMAND));
+  const postRegistered = Boolean(safeSettings.hooks?.PostToolUse && hasEntry(safeSettings.hooks.PostToolUse, POST_COMMAND));
+  const preReady = preRegistered && scriptStatus.preToolUse;
+  const postReady = postRegistered && scriptStatus.postToolUse;
+  const protectedState = valid && preReady && postReady;
+  const hasPartialState = preRegistered || postRegistered || scriptStatus.preToolUse || scriptStatus.postToolUse;
 
   return {
     schemaVersion: 1,
+    shipSafeVersion: PACKAGE_VERSION,
+    provider: 'claude-code',
     integration: 'claude-code',
-    state: protectedState ? 'active' : hasPartialState ? 'partial' : 'inactive',
+    state: !valid ? 'invalid' : protectedState ? 'active' : hasPartialState ? 'partial' : 'inactive',
     protected: protectedState,
-    settings: { valid: settingsValid, path: CLAUDE_SETTINGS_PATH },
+    settings: { valid, path: CLAUDE_SETTINGS_PATH },
     hooks: {
-      preToolUse: { registered: preRegistered, scriptPresent: scripts.preToolUse, ready: preReady },
-      postToolUse: { registered: postRegistered, scriptPresent: scripts.postToolUse, ready: postReady },
+      preToolUse: { registered: preRegistered, scriptPresent: scriptStatus.preToolUse, ready: preReady },
+      postToolUse: { registered: postRegistered, scriptPresent: scriptStatus.postToolUse, ready: postReady },
     },
     statusLine: {
-      registered: settings.statusLine?.command === STATUS_LINE_COMMAND,
-      scriptPresent: Boolean(scripts.statusLine),
-      ready: settings.statusLine?.command === STATUS_LINE_COMMAND && Boolean(scripts.statusLine),
-      conflict: Boolean(settings.statusLine && settings.statusLine.command !== STATUS_LINE_COMMAND),
+      registered: safeSettings.statusLine?.command === STATUS_LINE_COMMAND,
+      scriptPresent: scriptStatus.statusLine,
+      ready: safeSettings.statusLine?.command === STATUS_LINE_COMMAND && scriptStatus.statusLine,
+      conflict: Boolean(safeSettings.statusLine && safeSettings.statusLine.command !== STATUS_LINE_COMMAND),
     },
     scripts: { directory: STABLE_HOOK_DIR },
+    hookDirectory: '~/.ship-safe/hooks',
   };
 }
 
@@ -296,19 +314,62 @@ function readSettings() {
   return readSettingsState().settings;
 }
 
-function readSettingsState({ quiet = false } = {}) {
+function readSettingsState({ quiet = false, backupMalformed = true } = {}) {
+  if (!fs.existsSync(CLAUDE_SETTINGS_PATH)) return { settings: {}, valid: true };
+
+  let raw;
   try {
-    if (fs.existsSync(CLAUDE_SETTINGS_PATH)) {
-      return { settings: JSON.parse(fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8')), valid: true };
-    }
-  } catch {
-    // If the file exists but is malformed, back it up and start fresh
-    const backup = CLAUDE_SETTINGS_PATH + '.bak';
-    try { fs.copyFileSync(CLAUDE_SETTINGS_PATH, backup); } catch {}
-    if (!quiet) console.warn(chalk.yellow(`Warning: could not parse existing settings.json — backed up to ${backup}`));
+    raw = fs.readFileSync(CLAUDE_SETTINGS_PATH, 'utf8');
+  } catch (error) {
+    if (!quiet) console.warn(chalk.yellow(`Warning: could not read existing settings.json: ${error.message}`));
     return { settings: {}, valid: false };
   }
-  return { settings: {}, valid: true };
+
+  let settings;
+  try {
+    settings = JSON.parse(raw);
+  } catch {
+    return invalidSettingsState('could not parse existing settings.json', { quiet, backupMalformed });
+  }
+
+  if (!isValidSettingsShape(settings)) {
+    return invalidSettingsState('existing settings.json has an invalid structure', { quiet, backupMalformed });
+  }
+
+  return { settings, valid: true };
+}
+
+function invalidSettingsState(message, { quiet, backupMalformed }) {
+  let backupCreated = false;
+  const backup = CLAUDE_SETTINGS_PATH + '.bak';
+  if (backupMalformed) {
+    try {
+      fs.copyFileSync(CLAUDE_SETTINGS_PATH, backup);
+      backupCreated = true;
+    } catch {}
+  }
+
+  if (!quiet) {
+    const outcome = backupCreated ? ` — backed up to ${backup}` : ' — left unchanged';
+    console.warn(chalk.yellow(`Warning: ${message}${outcome}`));
+  }
+  return { settings: {}, valid: false };
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isValidSettingsShape(settings) {
+  if (!isRecord(settings)) return false;
+  if (settings.hooks !== undefined && !isRecord(settings.hooks)) return false;
+  for (const event of ['PreToolUse', 'PostToolUse']) {
+    if (settings.hooks?.[event] !== undefined && !Array.isArray(settings.hooks[event])) return false;
+  }
+  if (settings.statusLine !== undefined && settings.statusLine !== null && !isRecord(settings.statusLine)) return false;
+  if (isRecord(settings.statusLine) && settings.statusLine.command !== undefined
+    && typeof settings.statusLine.command !== 'string') return false;
+  return true;
 }
 
 function writeSettings(settings) {

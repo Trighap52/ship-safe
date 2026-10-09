@@ -3,14 +3,29 @@
 What Ship Safe is working on, what just shipped, and what we are deliberately
 not building. Updated when a release goes out.
 
-If you want to help, the [11.0 milestone](https://github.com/asamassekou10/ship-safe/milestone/3)
-is the current work and its open issues are claimable. Comment on an issue to
-take it. Every new rule still needs a false-positive story before it is
-considered finished.
+The 11.0.0 release is published, but the
+[11.0 milestone](https://github.com/asamassekou10/ship-safe/milestone/3)
+remains open because several planned workstreams below are still unfinished.
+The listed feature issues are claimable; the umbrella issue #202 tracks scope
+and evidence rather than a separate implementation task. Every new rule still
+needs a false-positive story before it is considered finished.
 
 ---
 
-## Just shipped — 10.1.0, attestation precision
+## Just shipped — 11.0.0, Untrusted Inputs
+
+This major release raises the runtime floor to Node.js 22.13+ on the 22.x line
+or Node.js 24+, and improves evidence quality across the scanner: versioned
+JSON/SARIF reports, recursive path redaction, more precise prompt-injection and
+credential findings, safer ReDoS probes, and a glob implementation with a
+nesting limit. The publish workflow now gates npm publication on deterministic
+security benchmarks and the dependency audit.
+
+Full detail in the [changelog](CHANGELOG.md).
+
+---
+
+## Before that — 10.1.0, attestation precision
 
 A small, single-purpose release. The pinned advisory table in
 `cli/data/agent-advisories.json` records disclosure URLs as *evidence*, and the
@@ -45,7 +60,7 @@ Full detail in the [changelog](CHANGELOG.md).
 
 ---
 
-## Now — 11.0, Untrusted Inputs
+## Remaining work — 11.0 milestone
 
 An agent reads your repository before you type anything. Ship Safe 11.0 reads it
 first, and says which files can cause execution and which agent versions are
@@ -72,7 +87,11 @@ documented to reach them. Scope and evidence model in
 | [#135](https://github.com/asamassekou10/ship-safe/issues/135) | Machine-readable protection status for agent integrations — *good first issue* |
 | [#136](https://github.com/asamassekou10/ship-safe/issues/136) | A truthful "Protected by Ship Safe" session indicator |
 | [#206](https://github.com/asamassekou10/ship-safe/issues/206) | Capability graph: repository-origin and A2A-delegation nodes |
-| [#202](https://github.com/asamassekou10/ship-safe/issues/202) | The 11.0 scope issue itself |
+
+Umbrella tracker: [#202](https://github.com/asamassekou10/ship-safe/issues/202)
+defines the 11.0 scope and evidence model; it is not a separate implementation
+task. Keep the milestone open until the remaining feature issues are complete
+or explicitly deferred.
 
 ### Two ideas shaping the work
 
