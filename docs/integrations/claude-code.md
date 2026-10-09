@@ -21,6 +21,10 @@ npx ship-safe@latest hooks status
 npx ship-safe@latest hooks status --json
 ```
 
+The machine-readable schema, state definitions, exit codes, privacy boundary,
+and compatibility guidance are documented in the
+[protection-status contract](./protection-status.md).
+
 The status line is local and does not send source code or credentials anywhere. It is an indicator of the installed hook lifecycle, not a replacement for a full repository scan.
 
 ## Existing status lines
